@@ -4,6 +4,7 @@ require 'http'
 require 'debug'
 
 require 'yaml'
+require 'archive/zip'
 
 class Immich
   def initialize
@@ -18,17 +19,29 @@ class Immich
   end
 
   def download_archive(asset_id, dir)
-    # /api/download/archive has the Live Photo audio file
+    # /api/download/archive has the Live Photo audio file in different assets
+    # /api/assets/#{asset_id}/original just render the static photo
+    unzipped_dir = File.join(dir, "..", "unzipped/#{asset_id}")
+    FileUtils.mkdir_p(unzipped_dir)
 
-    puts 'download_asset_zip'
-    url = "#{@host}/api/download/archive"
-
-    resp = HTTP.headers(accept: 'application/octet-stream', 'x-api-key': @key).post(
-      url, json: { "assetIds": [asset_id] }
-    )
     out = File.join(dir, "#{asset_id}.zip")
-    File.open(out, 'w') { |file| file.write(resp.body) }
+
+    unless File.exist?(out)
+
+      puts "Downloading #{asset_id}"
+      url = "#{@host}/api/download/archive"
+
+      resp = HTTP.headers(accept: 'application/octet-stream', 'x-api-key': @key).post(
+        url, json: { "assetIds": [asset_id] }
+      )
+
+      File.open(out, 'w') { |file| file.write(resp.body) }
+    end
+
+    Archive::Zip.extract(out, unzipped_dir, :create => false, :overwrite => :older)
   end
+
+  def unzip(asset_id, export) end
 
   # def download_asset(asset_id, dir)
   #   url = "#{@host}/api/assets/#{asset_id}/original"
@@ -57,6 +70,27 @@ class Immich
   end
 end
 
+class Export
+
+  def initialize(dir)
+    @dir = dir
+    FileUtils.mkdir_p(zipped)
+    FileUtils.mkdir_p(unzipped)
+  end
+
+  def dir
+    @dir
+  end
+
+  def zipped
+    File.join(@dir, "zipped")
+  end
+
+  def unzipped
+    File.join(@dir, "unzipped")
+  end
+end
+
 require 'optimist'
 
 opts = Optimist.options do
@@ -65,9 +99,6 @@ end
 
 Optimist.die :album, '-album required' unless opts[:album_given]
 
-puts opts
-
-output_dir = 'downloads'
 
 immich = Immich.new
 
@@ -76,23 +107,21 @@ require 'fileutils'
 immich.albums.each do |album|
   next unless album['albumName'] == opts[:album]
 
+  export = Export.new("downloads/#{album['albumName']}")
+
   download_info = immich.download_info(album['id'])
 
   album_info = immich.get_album_info(album['id'])
 
-  File.open(File.join(output_dir, "#{album['albumName']}.album-info.yaml"), 'w') do |out|
+  File.open(File.join(export.dir, "album-info.yaml"), 'w') do |out|
     YAML.dump(album_info, out)
   end
 
-  File.open(File.join(output_dir, "#{album['albumName']}.album-archive.yaml"), 'w') do |out|
+  File.open(File.join(export.dir, "album-archive.yaml"), 'w') do |out|
     YAML.dump(download_info, out)
   end
 
   #  debugger
-
-  dir = "#{output_dir}/#{album['albumName']}"
-
-  FileUtils.mkdir_p(dir)
 
   if download_info['statusCode'].nil?
 
@@ -103,7 +132,7 @@ immich.albums.each do |album|
       archive['assetIds'].each do |asset|
         i += 1
         puts format('%d / %d', i, album_info['assetCount'])
-        immich.download_archive(asset, dir)
+        immich.download_archive(asset, export.zipped)
       end
     end
 
