@@ -44,9 +44,9 @@ class Immich
 
     puts format('children %d %s', Dir.children(unzipped_dir).size, asset_id)
 
-    date_time = album_info['assets'].to_h {|x| [ x["id"], x["exifInfo"]["dateTimeOriginal"] ] }
+    date_time = album_info['assets'].to_h { |x| [x['id'], x['exifInfo']['dateTimeOriginal']] }
 
-    exif = album_info['assets'].to_h {|x| [ x["id"], x ] }
+    exif = album_info['assets'].to_h { |x| [x['id'], x] }
 
     Dir.children(unzipped_dir).each do |entry|
       if date_time[asset_id]
