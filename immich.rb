@@ -3,9 +3,10 @@
 require 'http'
 require 'debug'
 require 'fileutils'
-
+require 'zip'
 require 'yaml'
-require 'archive/zip'
+require 'time'
+require 'optimist'
 
 class Immich
   def initialize
@@ -21,15 +22,12 @@ class Immich
   end
 
   def download_archive(asset_id, dir, album_info, flatten_dir)
-    # /api/download/archive has the Live Photo audio file in different assets
-    # /api/assets/#{asset_id}/original just render the static photo
     unzipped_dir = File.join(dir, '..', "unzipped/#{asset_id}")
     FileUtils.mkdir_p(unzipped_dir)
 
     out = File.join(dir, "#{asset_id}.zip")
 
     unless File.exist?(out)
-
       puts "Downloading #{asset_id}"
       url = "#{@host}/api/download/archive"
 
@@ -40,7 +38,12 @@ class Immich
       File.open(out, 'w') { |file| file.write(resp.body) }
     end
 
-    Archive::Zip.extract(out, unzipped_dir)
+    # Extract files using rubyzip
+    Zip::File.open(out) do |zip_file|
+      zip_file.each do |entry|
+        entry.extract(File.join(unzipped_dir, entry.name)) { true } # Overwrite existing files
+      end
+    end
 
     puts format('children %d %s', Dir.children(unzipped_dir).size, asset_id)
 
@@ -49,34 +52,20 @@ class Immich
     exif = album_info['assets'].to_h { |x| [x['id'], x] }
 
     Dir.children(unzipped_dir).each do |entry|
+      src = File.join(unzipped_dir, entry)
+
       if date_time[asset_id]
-        src = File.join(unzipped_dir, entry)
         dest = File.join(flatten_dir, date_time[asset_id] + File.extname(entry).downcase)
         FileUtils.mv(src, dest)
+
+        # Set the file's timestamp
+        timestamp = Time.parse(date_time[asset_id])
+        File.utime(timestamp, timestamp, dest)
       else
         puts exif[asset_id]
-        ###
-        # downloads/South Korea/album-info.yaml
-        # 30014:  livePhotoVideoId: ea2c499a-e81b-489f-9a6b-7371553e3b16
-        #
-        # downloads/South Korea/album-archive.yaml
-        # 1942:  - ea2c499a-e81b-489f-9a6b-7371553e3b16
-
       end
     end
   end
-
-  def unzip(asset_id, export) end
-
-  # def download_asset(asset_id, dir)
-  #   url = "#{@host}/api/assets/#{asset_id}/original"
-  #
-  #   resp = HTTP.headers(accept: 'application/octet-stream', 'x-api-key': @key).get(
-  #     url
-  #   )
-  #   out = File.join(dir, "#{asset_id}.zip")
-  #   File.open(out, 'w') { |file| file.write(resp.body) }
-  # end
 
   def get_album_info(album_id)
     http_get "#{@host}/api/albums/#{album_id}"
@@ -91,7 +80,7 @@ class Immich
   end
 
   def http_post
-    HTTP.headers(:accept => 'application/json', 'x-api-key' => @key)
+    HTTP.headers(:accept => 'application/json', 'x-api-key': @key)
   end
 end
 
@@ -118,8 +107,6 @@ class Export
   end
 end
 
-require 'optimist'
-
 opts = Optimist.options do
   opt :album, 'Album Name', type: :string
 end
@@ -130,13 +117,10 @@ immich = Immich.new
 
 immich.albums.each do |album|
   next unless album['statusCode'].nil?
-
   next unless album['albumName'] == opts[:album]
 
   download_info = immich.download_info(album['id'])
-
   export = Export.new("downloads/#{album['albumName']}")
-
   album_info = immich.get_album_info(album['id'])
 
   File.open(File.join(export.dir, 'album-info.yaml'), 'w') do |out|
@@ -147,10 +131,7 @@ immich.albums.each do |album|
     YAML.dump(download_info, out)
   end
 
-  #  debugger
-
   if download_info['statusCode'].nil?
-
     puts format('%d MB', (download_info['totalSize'] / 1024 / 1024))
 
     i = 0
@@ -161,9 +142,7 @@ immich.albums.each do |album|
         immich.download_archive(asset, export.zipped, album_info, export.flatten)
       end
     end
-
   else
-    # {"statusCode"=>500, "message"=>"Internal server error"}
     puts download_info
   end
 end
